@@ -940,6 +940,9 @@ await test("a body leaves without a field Mistral does not declare", async () =>
   const body = JSON.stringify({
     model: "mistral-large-4",
     messages: [
+      // The shape that slipped through a comma-anchored pattern: the field is
+      // the *first* key of the object, so no preceding comma exists to match.
+      { reasoning_content: "", role: "assistant", content: "" },
       { role: "assistant", content: "a", reasoning_content: "" },
       { role: "assistant", content: "b", reasoning_content: "quoted \"x\" and \\ slashes" },
       { role: "assistant", content: "c", cache_control: { type: "ephemeral" } },
@@ -954,10 +957,17 @@ await test("a body leaves without a field Mistral does not declare", async () =>
   const parsed = JSON.parse(clean);
   assert.deepEqual(
     parsed.messages.map((message) => Object.keys(message).sort()),
-    [["content", "role"], ["content", "role"], ["content", "role"], ["content", "role"], ["content", "role", "tool_call_id"]],
+    [
+      ["content", "role"],
+      ["content", "role"],
+      ["content", "role"],
+      ["content", "role"],
+      ["content", "role"],
+      ["content", "role", "tool_call_id"],
+    ],
     "only declared keys remain",
   );
-  assert.equal(parsed.messages[1].content, "b", "a neighbouring value is untouched");
+  assert.equal(parsed.messages[2].content, "b", "a neighbouring value is untouched");
 });
 
 await test("a forked session's stray reasoning_content and string content reach the wire clean", async () => {
