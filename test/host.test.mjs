@@ -321,8 +321,16 @@ await test("wire request carries reasoning_effort, tools and attribution", async
     request.body.messages[0].content,
     "You are a careful assistant.\n\nExtra system note.",
   );
+  assert.equal(request.body.parallel_tool_calls, true, "Vibe sends this with every tool set");
   const assistant = request.body.messages.find((message) => message.role === "assistant");
-  assert.equal(assistant.content, "Sure.");
+  assert.deepEqual(
+    assistant.content,
+    [
+      { type: "thinking", thinking: [{ type: "text", text: "previous thinking" }] },
+      { type: "text", text: "Sure." },
+    ],
+    "reasoning replays as thinking chunks inside content, like Vibe",
+  );
   assert.equal(assistant.tool_calls[0].function.name, "read_file");
   const toolMessage = request.body.messages.find((message) => message.role === "tool");
   assert.equal(toolMessage.tool_call_id, assistant.tool_calls[0].id);
@@ -392,7 +400,60 @@ await test("a replayed assistant message never carries reasoning_content", async
     const assistant = body.messages.filter((message) => message.role === "assistant");
     assert.equal(assistant.length, 1);
     assert.deepEqual(Object.keys(assistant[0]).sort(), ["content", "role"], "only role and content");
-    assert.equal(assistant[0].content, "answer");
+    assert.deepEqual(
+      assistant[0].content,
+      [
+        { type: "thinking", thinking: [{ type: "text", text: "internal" }] },
+        { type: "text", text: "answer" },
+      ],
+      "the thinking chunk is the only place reasoning may travel",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+await test("a model without an effort ladder receives no thinking chunks", async () => {
+  // Vibe gates the replay on the route taking reasoning input. Codestral has no
+  // ladder here, so a thinking block in the history is dropped rather than sent
+  // to a model that never declared the chunk type.
+  const captured = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    captured.push(JSON.parse(init.body));
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode('data: {"id":"x","choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'),
+        );
+        controller.close();
+      },
+    });
+    return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+  try {
+    const adapter = new MistralVibeAdapter(() => ({ apiKey: "test-key", baseURL: "http://127.0.0.1:1/v1" }));
+    const options = {
+      provider: "mistral-vibe",
+      model: "codestral-2508",
+      system: "s",
+      messages: [
+        { role: "user", content: [{ type: "text", text: "one" }] },
+        {
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "internal" },
+            { type: "text", text: "answer" },
+          ],
+        },
+        { role: "user", content: [{ type: "text", text: "two" }] },
+      ],
+      maxTokens: 32,
+    };
+    for await (const chunk of adapter.stream(options)) void chunk;
+    const assistant = captured[0].messages.filter((message) => message.role === "assistant");
+    assert.equal(assistant[0].content, "answer", "no ladder, no thinking chunks");
+    assert.equal(JSON.stringify(captured[0]).includes("thinking"), false);
   } finally {
     globalThis.fetch = original;
   }
