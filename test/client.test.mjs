@@ -185,6 +185,7 @@ seedHooks({
     route: "mistral-vibe",
     baseURL: "https://api.mistral.ai/v1",
     apiKeyEnv: "MISTRAL_API_KEY",
+    build: "1.0.0+abc12345",
     hasKey: true,
     hasStudioKey: false,
     monthlyCapUSD: 150,
@@ -235,6 +236,9 @@ assert.doesNotMatch(populated, /·\s*\d+\s+models/, "the route tally line is gon
 assert.doesNotMatch(populated, /\b(hidden|not stored)\b/, "status badges are gone");
 assert.doesNotMatch(populated, /\b(Reveal|Hide)\b/, "no separate reveal button: the eye lives inside the field");
 assert.match(populated, /Fetch available models/, "the fetch control sits on the Models card");
+// The page names the host build it is talking to, so "applied" can be checked
+// against "loaded": a module cached in the host process answers without a build.
+assert.match(populated, /host build 1\.0\.0\+/, "the loaded host build is on the page");
 
 // Every row names the model and states what it can do: the ladder, the
 // modality, the context window. A discovered row whose effort list the API does

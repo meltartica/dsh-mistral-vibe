@@ -18,6 +18,7 @@ import {
   modelsDevFacts,
   limitSnapshot,
   sanitizeMessages,
+  stripWireFields,
   settingsServiceOf,
 } from "../lib/index.js";
 
@@ -930,6 +931,33 @@ await test("the wire sanitiser drops every field Mistral does not declare", asyn
     { role: "tool", tool_call_id: "c1", content: "ok" },
   ]);
   assert.equal(JSON.stringify(out).includes("reasoning_content"), false, "no reasoning_content survives");
+});
+
+await test("a body leaves without a field Mistral does not declare", async () => {
+  // The message projection already rebuilds every entry, so this guards the
+  // serialised body: a history composed elsewhere (a fork, an import, another
+  // provider's cache) must not be able to cost the whole turn with a 422.
+  const body = JSON.stringify({
+    model: "mistral-large-4",
+    messages: [
+      { role: "assistant", content: "a", reasoning_content: "" },
+      { role: "assistant", content: "b", reasoning_content: "quoted \"x\" and \\ slashes" },
+      { role: "assistant", content: "c", cache_control: { type: "ephemeral" } },
+      { role: "assistant", content: "d", reasoning: ["low"], reasoning_content: null },
+      { role: "tool", tool_call_id: "abc", content: "ok" },
+    ],
+  });
+  const clean = stripWireFields(body);
+  for (const field of ["reasoning_content", "cache_control", '"reasoning"']) {
+    assert.equal(clean.includes(field), false, `${field} must not survive serialisation`);
+  }
+  const parsed = JSON.parse(clean);
+  assert.deepEqual(
+    parsed.messages.map((message) => Object.keys(message).sort()),
+    [["content", "role"], ["content", "role"], ["content", "role"], ["content", "role"], ["content", "role", "tool_call_id"]],
+    "only declared keys remain",
+  );
+  assert.equal(parsed.messages[1].content, "b", "a neighbouring value is untouched");
 });
 
 await test("a forked session's stray reasoning_content and string content reach the wire clean", async () => {
