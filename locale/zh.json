@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Mistral Vibe",
+    "description": "自带 Mistral 官方 API 接入：最新的 Vibe 模型目录、按模型映射到 reasoning_effort 的思考档位，以及流式思考块。"
+  }
+}

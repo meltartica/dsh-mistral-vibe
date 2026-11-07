@@ -1,0 +1,12 @@
+# Register the Mistral Vibe provider.
+#
+# This bundle owns the LLM route `mistral-vibe` end to end (adapter, catalogue,
+# thinking levels), so the patch only inserts the plugin row. It does NOT touch
+# `agent-default-model`: pick "Mistral Vibe" in the model selector yourself.
+#
+# The API key is read from the credential reference named by `apiKeyEnv`
+# (default `MISTRAL_API_KEY`) through the credentials service, then from the
+# host process environment.
+- insert:
+    - id: llm-mistral-vibe
+      name: dsh-mistral-vibe

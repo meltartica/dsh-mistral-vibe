@@ -1,0 +1,30 @@
+# dependencies
+node_modules/
+
+# package manager
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+.npm/
+.pnpm-store/
+.npm-cache/
+.inspect/
+
+# publish artifacts
+*.tgz
+
+# logs
+*.log
+npm-debug.log*
+
+# editor / os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# local scratch
+.tmp/
+*.bak
+*.bak-*
+cordis.patch.yml.bak*

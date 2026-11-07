@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Mistral Vibe",
+    "description": "A self-contained Mistral La Plateforme provider with the current Vibe model catalogue, per-model thinking levels mapped to reasoning_effort, and streaming reasoning blocks."
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "name": "dsh-mistral-vibe",
+  "displayName": "Mistral Vibe",
+  "version": "1.0.0",
+  "description": "Mistral Vibe in DeepSeek Harness: a self-contained Mistral La Plateforme provider with the current Vibe model catalogue, per-model thinking levels mapped to reasoning_effort, streaming reasoning blocks, and a settings page that stores the whole model list.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Meltartica",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/meltartica/dsh-mistral-vibe.git"
+  },
+  "homepage": "https://github.com/meltartica/dsh-mistral-vibe#readme",
+  "bugs": {
+    "url": "https://github.com/meltartica/dsh-mistral-vibe/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "mistral",
+    "mistral-vibe",
+    "la-plateforme",
+    "model-provider",
+    "reasoning-effort"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "lib/index.js",
+  "icon": "icon.svg",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "vendor",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test/host.test.mjs && node test/client.test.mjs",
+    "test:host": "node test/host.test.mjs",
+    "test:client": "node test/client.test.mjs",
+    "check": "node --check lib/index.js && node --check lib/client.js && npm test",
+    "sync:models": "node scripts/sync-models.mjs",
+    "probe": "node scripts/live-check.mjs",
+    "client:off": "node scripts/client-half-toggle.mjs off",
+    "client:on": "node scripts/client-half-toggle.mjs on",
+    "pack": "npm pack",
+    "publish:npm": "npm publish"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  }
+}
