@@ -111,6 +111,7 @@ npm run test:client      # the browser half, rendered against a React stub
 npm run check            # node --check both halves, then the suites
 npm run sync:models      # rewrite MODEL_CATALOGUE from models.dev
 npm run probe            # live /v1/models read with the stored key
+npm run stamp            # rewrite the BUILD stamp in lib/index.js
 ```
 
 Layout:
@@ -128,11 +129,21 @@ The suites need no network and no key: the host suite runs the real adapter agai
 local SSE server, and the models.dev read is pointed at a local stub through
 `MISTRAL_MODELS_DEV_URL`.
 
+### Which build is running
+
+A host keeps an applied plugin module in memory: re-applying the entry writes
+`applied` to the operation log but does **not** re-import the file, so a fix can
+be on disk and still not run. `BUILD` makes that observable — it is the hash of
+`lib/index.js` without the stamp line, logged on mount, returned by
+`GET /mistral-vibe/config`, and printed under the model list on the settings
+page. "host build unknown" means the host is still serving a module loaded
+before this field existed; restart DeepSeek Harness to pick the file up.
+
 ### Route surface
 
 | route | effect |
 | --- | --- |
-| `GET /mistral-vibe/config` | the row as the page needs it — no key values |
+| `GET /mistral-vibe/config` | the row as the page needs it, plus `build` — no key values |
 | `POST /mistral-vibe/config` | save `apiKey`, `studioApiKey`, `baseURL`, `displayName`, `disabledModels` |
 | `POST /mistral-vibe/discover` | merge `GET /v1/models` into the stored list; answers `{source, added, models, persisted}` |
 
