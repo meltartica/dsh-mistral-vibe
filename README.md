@@ -108,6 +108,7 @@ A level is sent only when the model publishes one:
 npm test                 # host + client suites, offline
 npm run test:host        # adapter, discovery, settings, wire encoding
 npm run test:client      # the browser half, rendered against a React stub
+npm run test:contract    # the emitted stream, through the harness's own assembler
 npm run check            # node --check both halves, then the suites
 npm run sync:models      # rewrite MODEL_CATALOGUE from models.dev
 npm run probe            # live /v1/models read with the stored key
@@ -122,12 +123,33 @@ lib/client.js      browser half: the settings page and its nav glyph
 vendor/            schemastery + cosmokit, vendored as ESM
 locale/            en/zh titles for the settings entry
 scripts/           sync-models, live-check, client-half-toggle
-test/              host.test.mjs, client.test.mjs
+test/              host.test.mjs, contract.test.mjs, client.test.mjs
 ```
 
 The suites need no network and no key: the host suite runs the real adapter against a
 local SSE server, and the models.dev read is pointed at a local stub through
 `MISTRAL_MODELS_DEV_URL`.
+
+### Session-safety invariants
+
+A stream that is wrong here does not fail a turn — it writes a session log that
+later refuses to load. The rules the host actually enforces, and what this route
+guarantees against each:
+
+| rule | where it bites | this route |
+| --- | --- | --- |
+| a tool-call id must be unique for the whole session | `assistant/message repeats advertised tool call <id>` | ids are a 9-character hash of the provider id **plus a serial that never resets**, so a provider that numbers calls `call_1`, `call_2` per response cannot repeat across turns |
+| `tool/call` must echo the advertised name and arguments byte for byte | `tool/call <id> does not match one advertised tool call` | the block-end carries the same accumulated name/arguments the deltas streamed, and `{}` when nothing arrived, so the value always parses |
+| only text, reasoning and tool-call blocks | `cannot assemble incomplete block of type …` | no other block type is ever started |
+| chunk types are a closed set; `argumentsDelta` is a string; every index is a non-negative safe integer | `AssistantStreamAccumulator.push` throws | enforced by the contract test, chunk by chunk |
+| `usage` precedes `finish`, nothing follows `finish` | a stream that ends early loses usage | the generator yields usage then finish, last |
+| each call gets its own block | two calls merging concatenates their arguments | a missing `index`, or an index reused by a different id, allocates a fresh slot |
+
+`npm run test:contract` runs the emitted stream through the harness's real
+`AssistantStreamAccumulator` and `BlockAssembler` (imported from the installed
+DeepSeek Harness; the file prints SKIP when that install is absent) and then
+applies the tool-lifecycle rules above. It is the only check that would have
+caught the `chatcmplt` corruption before it hit a log.
 
 ### Which build is running
 
