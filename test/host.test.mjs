@@ -20,6 +20,8 @@ import {
   sanitizeMessages,
   stripWireFields,
   settingsServiceOf,
+  authorizeRequest,
+  sameToken,
 } from "../lib/index.js";
 
 function sse(events) {
@@ -643,6 +645,71 @@ await test("a rejected discovery read reports AUTH instead of crashing", async (
   assert.equal(failure.failure.status, 401);
 });
 
+await test("the settings routes answer an exposed deployment without opening themselves", async () => {
+  // A web UI reached over HTTP/S is served by the same host, so its browser
+  // requests are same-origin and need nothing extra. Anything else must present
+  // the configured token, because the POST surface can move `baseURL`.
+  const request = (headers) => ({ headers });
+  const exposed = { allowRemote: true };
+
+  assert.deepEqual(await authorizeRequest(request({ host: "127.0.0.1:55051" }), exposed, undefined), { ok: true });
+  assert.deepEqual(await authorizeRequest(request({ host: "[::1]:8080" }), exposed, undefined), { ok: true });
+
+  // Same-origin from a public host: allowed, token or not.
+  assert.deepEqual(
+    await authorizeRequest(
+      request({ host: "vibe.example.com", origin: "https://vibe.example.com", "sec-fetch-site": "same-origin" }),
+      exposed,
+      undefined,
+    ),
+    { ok: true },
+  );
+
+  // Cross-origin with no configured token: refused, and the reason is machine-readable.
+  const missing = await authorizeRequest(request({ host: "vibe.example.com", origin: "https://evil.test" }), exposed, undefined);
+  assert.equal(missing.ok, false);
+  assert.equal(missing.status, 401);
+  assert.equal(missing.body.code, "access_token_required");
+
+  // Either header shape satisfies the gate; a wrong value does not.
+  const configured = "s3cret-token-value";
+  assert.deepEqual(
+    await authorizeRequest(request({ host: "vibe.example.com", "x-mistral-vibe-token": configured }), exposed, configured),
+    { ok: true },
+  );
+  assert.deepEqual(
+    await authorizeRequest(request({ host: "vibe.example.com", authorization: `Bearer ${configured}` }), exposed, configured),
+    { ok: true },
+  );
+  const rejected = await authorizeRequest(request({ host: "vibe.example.com", authorization: "Bearer nope" }), exposed, configured);
+  assert.equal(rejected.status, 401);
+  assert.equal(rejected.body.code, "access_token_rejected");
+  assert.equal(rejected.body.error, "access token does not match");
+
+  // A same-origin GET may carry only \`Referer\` (or nothing but \`sec-fetch-site\`),
+  // so the page the same server served is not asked for a token.
+  assert.deepEqual(
+    await authorizeRequest(request({ host: "vibe.example.com", referer: "https://vibe.example.com/settings" }), exposed, undefined),
+    { ok: true },
+  );
+  assert.deepEqual(
+    await authorizeRequest(request({ host: "vibe.example.com", "sec-fetch-site": "same-origin" }), exposed, undefined),
+    { ok: true },
+  );
+
+  // Turning remote access off restores the old behaviour, and loopback still works.
+  const off = await authorizeRequest(request({ host: "vibe.example.com", authorization: `Bearer ${configured}` }), { allowRemote: false }, configured);
+  assert.equal(off.status, 403);
+  assert.equal(off.body.code, "loopback_only");
+  assert.deepEqual(await authorizeRequest(request({ host: "localhost:3000" }), { allowRemote: false }, undefined), { ok: true });
+
+  // The comparison is constant-time and length-safe.
+  assert.equal(sameToken(configured, configured), true);
+  assert.equal(sameToken(configured, `${configured}x`), false);
+  assert.equal(sameToken("", ""), false);
+  assert.equal(sameToken(undefined, configured), false);
+});
+
 await test("every settings field is declared volatile so the Settings page lists the route", async () => {
   // dsh-settings describe() drops an entry outright when volatileForm(schema)
   // returns undefined (no field carries meta.volatile). Without a settings
@@ -700,6 +767,8 @@ await test("dsh-settings volatileForm() accepts this schema instead of dropping 
   const form = volatileForm(Config);
   assert.ok(form !== undefined, "volatileForm must not return undefined");
   assert.deepEqual(Object.keys(form).sort(), [
+    "accessToken",
+    "allowRemote",
     "apiKey",
     "apiKeyEnv",
     "baseURL",
@@ -787,17 +856,20 @@ await test("the generated catalogue matches models.dev for the ids it ships", as
   assert.equal(byId.has("mistral-medium-latest"), false, "an alias must not get its own row");
 });
 
-await test("a stored alias id upgrades to the dated model it names", async () => {
-  // models.dev lists mistral-medium-latest beside mistral-medium-2604. The
-  // catalogue ships one row (the dated one), so a session that selected the
-  // alias must still resolve, with the dated id and its real limits.
+await test("a stored alias id borrows the dated model's metadata and echoes its own id", async () => {
+  // models.dev lists mistral-medium-latest beside mistral-medium-2604 and the
+  // catalogue ships one row (the dated one). A session that already selected the
+  // alias must keep working: it resolves to the dated entry's limits, but the id
+  // stays the one that was asked for, because the registry rejects an adapter
+  // that echoes a different id (INVALID_MODEL_INFO).
   const prepared = await adapter.prepareCall("mistral-vibe", "mistral-medium-latest");
-  assert.equal(prepared.model.id, "mistral-medium-2604", "the alias redirects to the dated id");
+  assert.equal(prepared.model.id, "mistral-medium-latest", "the requested id is echoed");
   assert.equal(prepared.model.name, "Mistral Medium 3.5");
   assert.equal(prepared.model.context.contextWindow, 262144);
   const resolved = await adapter.resolveModel("mistral-vibe", "codestral-latest");
-  assert.equal(resolved.id, "codestral-2508");
-  assert.deepEqual(resolved.reasoning, undefined, "codestral is not a reasoning model");
+  assert.equal(resolved.id, "codestral-latest");
+  assert.equal(resolved.name, "Codestral 25.08", "metadata comes from the dated entry");
+  assert.equal(resolved.reasoning, undefined, "codestral is not a reasoning model");
 });
 
 await test("a model Mistral added after this bundle is discovered, stays listed and resolves", async () => {

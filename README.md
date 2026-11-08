@@ -75,6 +75,9 @@ Settings → **Mistral Vibe** owns every field. The same row is editable in
 | `apiKeyEnv` | `MISTRAL_API_KEY` | credential-store name consulted when the row is empty |
 | `disabledModels` | `[]` | ids hidden from the picker, still listed on the page |
 | `modelsJson` | `""` | the stored model list, written by **Fetch available models** |
+| `bypassRewrite` | `true` | send `x-bili-passthrough: 1` so an in-process rewriter relays the body verbatim |
+| `allowRemote` | `true` | answer the settings routes for a non-loopback request (same-origin or with the token) |
+| `accessToken` | — | token a cross-origin request must present; falls back to `MISTRAL_VIBE_ACCESS_TOKEN` |
 
 Both keys are `role("secret")` and `volatile()`. The page never receives either value —
 it gets `hasKey` / `hasStudioKey` booleans.
@@ -90,6 +93,25 @@ into the stored list, and saves it. What lands in the store:
 
 If the row cannot be written (read-only profile), the page says so instead of silently
 dropping the result.
+
+### Exposed deployments (HTTP/S, not just loopback)
+
+The settings routes are served by the same web server as the page, so exposing the
+web UI over HTTP/S does not need any extra setup: the page's own requests are
+same-origin and are accepted.
+
+| request | answer |
+| --- | --- |
+| loopback (`127.0.0.1`, `localhost`, `[::1]`) | always accepted |
+| same origin (`Origin`/`Referer` host equals `Host`, or `Sec-Fetch-Site: same-origin`) | accepted |
+| different origin, with the token in `x-mistral-vibe-token` or `Authorization: Bearer …` | accepted |
+| different origin, no token configured | `401 {"code":"access_token_required"}` |
+| different origin, wrong token | `401 {"code":"access_token_rejected"}` |
+| `allowRemote: false` | `403 {"code":"loopback_only"}` |
+
+The reason the token matters: these routes can move `baseURL` and therefore where
+the key is sent. **Remote access** on the page stores the token in this browser's
+`localStorage` and sends it on every request; the value never enters the bundle.
 
 ### Thinking levels
 
@@ -109,7 +131,8 @@ npm test                 # host + client suites, offline
 npm run test:host        # adapter, discovery, settings, wire encoding
 npm run test:client      # the browser half, rendered against a React stub
 npm run test:contract    # the emitted stream, through the harness's own assembler
-npm run check            # node --check both halves, then the suites
+npm run check            # node --check both halves, then the suites and the audit
+npm run audit:harness    # run this adapter through the installed harness's own validators
 npm run sync:models      # rewrite MODEL_CATALOGUE from models.dev
 npm run probe            # live /v1/models read with the stored key
 npm run stamp            # rewrite the BUILD stamp in lib/index.js
@@ -169,7 +192,28 @@ before this field existed; restart DeepSeek Harness to pick the file up.
 | `POST /mistral-vibe/config` | save `apiKey`, `studioApiKey`, `baseURL`, `displayName`, `disabledModels` |
 | `POST /mistral-vibe/discover` | merge `GET /v1/models` into the stored list; answers `{source, added, models, persisted}` |
 
-All three are loopback-only and answer `403 {error: "loopback only"}` to anything else.
+All three accept loopback and same-origin requests, and answer anything else with
+`401 {"code":"access_token_required"}` or `401 {"code":"access_token_rejected"}`
+unless `allowRemote: false`, which restores `403 {"code":"loopback_only"}`.
+
+### Auditing against the installed harness
+
+`npm run audit:harness` imports the harness's **real** `LlmRuntime` and
+`BlockAssembler` from
+`%LOCALAPPDATA%\Programs\DSH NEXT\resources\app\node_modules\@deepseek-ai\dsh-llm`
+(or `DSH_LLM_PATH`) and feeds this adapter's output through them, so the checks
+are the harness's own code rather than a restatement of it:
+
+| check | the failure it prevents |
+| --- | --- |
+| catalog passes `listModels` validation | duplicate or unnamed id → `INVALID_CATALOG` |
+| every advertised id passes `normalizeModelInfo` | bad `name` / window / maxTokens → `INVALID_MODEL_INFO`, `INVALID_MODEL_CONTEXT` |
+| a retired alias echoes the requested id | `resolved.id !== model` → `INVALID_MODEL_INFO` on every turn |
+| an unknown id still returns valid metadata | a session that stored a dropped id keeps working |
+| ladders have unique efforts and a known default | `INVALID_MODEL_REASONING` |
+| a streamed reply builds through `BlockAssembler` | an unknown chunk, a bad index or a non-string `argumentsDelta` |
+
+It exits 0 with `SKIP` when no harness is installed, so it is safe in CI.
 
 ## Notes / limitations
 

@@ -1,7 +1,7 @@
 {
   "name": "dsh-mistral-vibe",
   "displayName": "Mistral Vibe",
-  "version": "1.0.7",
+  "version": "1.1.1",
   "description": "Mistral Vibe in DeepSeek Harness: a self-contained Mistral La Plateforme provider with the current Vibe model catalogue, per-model thinking levels mapped to reasoning_effort, streaming reasoning blocks, and a settings page that stores the whole model list.",
   "type": "module",
   "license": "MIT",
@@ -51,7 +51,8 @@
     "test:host": "node test/host.test.mjs",
     "test:contract": "node test/contract.test.mjs",
     "test:client": "node test/client.test.mjs",
-    "check": "node scripts/stamp-build.mjs && node --check lib/index.js && node --check lib/client.js && npm test",
+    "audit:harness": "node scripts/audit-harness.mjs",
+    "check": "node scripts/stamp-build.mjs && node --check lib/index.js && node --check lib/client.js && npm test && node scripts/audit-harness.mjs",
     "sync:models": "node scripts/sync-models.mjs",
     "stamp": "node scripts/stamp-build.mjs",
     "probe": "node scripts/live-check.mjs",

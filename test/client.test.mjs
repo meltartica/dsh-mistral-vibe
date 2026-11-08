@@ -236,6 +236,13 @@ assert.doesNotMatch(populated, /·\s*\d+\s+models/, "the route tally line is gon
 assert.doesNotMatch(populated, /\b(hidden|not stored)\b/, "status badges are gone");
 assert.doesNotMatch(populated, /\b(Reveal|Hide)\b/, "no separate reveal button: the eye lives inside the field");
 assert.match(populated, /Fetch available models/, "the fetch control sits on the Models card");
+// The page can also answer a web UI exposed over HTTP/S: that needs a token, and
+// the copy this browser holds is what the request carries.
+assert.match(populated, /Remote access/, "the exposed-deployment card renders");
+assert.match(populated, /Answer this page when the web UI is exposed/, "the toggle explains itself");
+assert.match(populated, /Access token/, "the token field renders");
+assert.match(populated, /Save token/, "the token can be stored");
+assert.match(populated, /no token set/, "the card reports that no token exists yet");
 // The page names the host build it is talking to, so "applied" can be checked
 // against "loaded": a module cached in the host process answers without a build.
 assert.match(populated, /host build 1\.0\.0\+/, "the loaded host build is on the page");
@@ -284,11 +291,11 @@ seedHooks({
 const nodes = elements(exported.MistralVibeSection());
 seedHooks({});
 const eye = nodes.filter((node) => node.type === "button" && /key$/.test(node.props?.["aria-label"] ?? ""));
-assert.equal(eye.length, 2, "each key field owns exactly one eye toggle");
+assert.equal(eye.length, 3, "each secret field owns exactly one eye toggle");
 assert.equal(typeof eye[0].props.onClick, "function", "the eye toggles its field");
 assert.equal(eye[0].props["aria-pressed"], false, "a masked field reports the un-pressed state");
 const passwordFields = nodes.filter((node) => node.type === "input" && node.props?.type === "password");
-assert.equal(passwordFields.length, 2, "both keys start masked");
+assert.equal(passwordFields.length, 3, "every secret starts masked");
 assert.equal(passwordFields[0].props.style.paddingRight, 34, "the input reserves room for the eye glyph");
 
 // Type sizes: the field, the card headings and the buttons all render at 13px,
