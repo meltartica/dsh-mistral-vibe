@@ -459,6 +459,53 @@ await test("a model without an effort ladder receives no thinking chunks", async
   }
 });
 
+await test("an in-process request rewriter is asked to relay verbatim", async () => {
+  // bili (billion-context) injects reasoning_content into an assistant turn that
+  // carries tool calls whenever the model id matches /deepseek/i, and Mistral
+  // rejects that field with 422 extra_forbidden. The header below marks the
+  // request as a verbatim relay; Mistral itself ignores unknown headers.
+  const seen = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url: String(url), headers: init.headers });
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode('data: {"id":"x","choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'),
+        );
+        controller.close();
+      },
+    });
+    return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+  try {
+    const options = {
+      provider: "mistral-vibe",
+      model: "deepseek-v4-1-flash-1017",
+      system: "s",
+      messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+      maxTokens: 16,
+    };
+    const on = new MistralVibeAdapter(() => ({ apiKey: "k", baseURL: "http://127.0.0.1:1/v1" }));
+    for await (const chunk of on.stream(options)) void chunk;
+    assert.equal(seen.at(-1).headers["x-bili-passthrough"], "1", "the relay header is sent");
+
+    const off = new MistralVibeAdapter(() => ({
+      apiKey: "k",
+      baseURL: "http://127.0.0.1:1/v1",
+      bypassRewrite: false,
+    }));
+    for await (const chunk of off.stream(options)) void chunk;
+    assert.equal(
+      seen.at(-1).headers["x-bili-passthrough"],
+      undefined,
+      "the switch removes the header for gateways that reject unknown ones",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 await test("account reads prefer the Studio key and fall back to the Vibe Code key", async () => {
   // Mistral issues Studio/API keys and Vibe Code keys separately, and a single-key
   // setup must keep working: the account reader prefers the Studio key, then the
@@ -607,6 +654,7 @@ await test("dsh-settings volatileForm() accepts this schema instead of dropping 
     "apiKey",
     "apiKeyEnv",
     "baseURL",
+    "bypassRewrite",
     "disabledModels",
     "discoveredInfo",
     "discoveredModels",

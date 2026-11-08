@@ -158,10 +158,19 @@ All three are loopback-only and answer `403 {error: "loopback only"}` to anythin
   through the API, so this plugin does not pretend to show them.
 - **A discovered model's ladder depends on models.dev.** An id models.dev does not know
   keeps "levels unknown": no level control, and no `reasoning_effort` on the wire.
-- **Replay is sanitised.** A forked or imported session can carry
-  `assistant.reasoning_content`, which Mistral rejects with a body-wide `422
-  extra_forbidden`. Every request is rebuilt from the fields Mistral declares, so the
-  history replays.
+- **Replay is sanitised.** Every request is rebuilt from the fields Mistral declares:
+  `role`, `content`, and `tool_calls` with `id`/`type`/`function`. Reasoning replays the
+  way Vibe replays it — as `{"type":"thinking","thinking":[{"type":"text",…}]}` chunks
+  inside `content`, gated on the model declaring an effort ladder — never as a sibling
+  `reasoning_content` field, which Mistral answers with a body-wide `422 extra_forbidden`.
+- **An in-process request rewriter is asked to stay out of the way.** billion-context
+  ("bili") injects a blank `reasoning_content` into any assistant turn carrying
+  `tool_calls` when the model id matches `/deepseek/i` — which is every
+  `deepseek-v4-1-flash-1017` turn that used a tool — and Mistral rejects the field.
+  Every request here therefore carries `x-bili-passthrough: 1`, bili's own verbatim-relay
+  marker; Mistral ignores unknown headers. Set `bypassRewrite: false` to stop sending it
+  behind a gateway that rejects unknown headers. The trade-off is that bili does no
+  folding on this route while the header is on.
 - **Alias ids still resolve.** `mistral-medium-latest` is not a row of its own; a session
   that selected it resolves to `mistral-medium-2604` with that entry's limits.
 
