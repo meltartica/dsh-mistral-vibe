@@ -459,6 +459,55 @@ await test("a model without an effort ladder receives no thinking chunks", async
   }
 });
 
+await test("two tool calls in one message never share an id", async () => {
+  // Harness tool-call ids share a long prefix (`chatcmpltool…`). Truncating the
+  // first nine alphanumerics gave every call in a message the id `chatcmplt`, so
+  // the session log refused to load: "assistant/message repeats advertised tool
+  // call chatcmplt". Ids must be unique per call and still 9 alphanumerics.
+  const captured = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    captured.push({ url: String(url), body: init.body });
+    const chunks = [
+      '{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"chatcmpltool_a","function":{"name":"pwsh","arguments":"{}"}}]}}]}',
+      '{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"chatcmpltool_b","function":{"name":"pwsh","arguments":"{}"}}]}}]}',
+      '{"choices":[{"delta":{"tool_calls":[{"index":2,"id":"chatcmpltool_c","function":{"name":"pwsh","arguments":"{}"}}]}}]}',
+      '{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+    ];
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(`data: ${chunk}\n\n`));
+        controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+        controller.close();
+      },
+    });
+    return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+  try {
+    const adapter = new MistralVibeAdapter(() => ({ apiKey: "k", baseURL: "http://127.0.0.1:1/v1" }));
+    const options = {
+      provider: "mistral-vibe",
+      model: "mistral-large-4",
+      system: "s",
+      messages: [{ role: "user", content: [{ type: "text", text: "go" }] }],
+      maxTokens: 16,
+    };
+    const ids = [];
+    for await (const chunk of adapter.stream(options)) {
+      // The id rides on the delta; block-start carries only the block type.
+      if (chunk.type === "tool-call-delta" && chunk.name !== undefined) ids.push(chunk.id);
+    }
+    assert.equal(ids.length, 3, "every call reaches the harness");
+    assert.equal(new Set(ids).size, 3, "no two calls share an id");
+    for (const id of ids) {
+      assert.match(id, /^[A-Za-z0-9]{9}$/, `${id} keeps Mistral's id shape`);
+      assert.notEqual(id, "chatcmplt", "the shared prefix is not the id");
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 await test("an in-process request rewriter is asked to relay verbatim", async () => {
   // bili (billion-context) injects reasoning_content into an assistant turn that
   // carries tool calls whenever the model id matches /deepseek/i, and Mistral

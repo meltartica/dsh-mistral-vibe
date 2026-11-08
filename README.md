@@ -171,6 +171,11 @@ All three are loopback-only and answer `403 {error: "loopback only"}` to anythin
   marker; Mistral ignores unknown headers. Set `bypassRewrite: false` to stop sending it
   behind a gateway that rejects unknown headers. The trade-off is that bili does no
   folding on this route while the header is on.
+- **Tool-call ids are hashed, never truncated.** Harness ids share a long prefix
+  (`chatcmpltool…`), so the first nine alphanumerics were the same string for every
+  call in a message — `chatcmplt` — and the session log then refused to load:
+  "assistant/message repeats advertised tool call chatcmplt". Ids are now a 9-character
+  hash of the whole id, with a per-turn collision guard.
 - **Alias ids still resolve.** `mistral-medium-latest` is not a row of its own; a session
   that selected it resolves to `mistral-medium-2604` with that entry's limits.
 
