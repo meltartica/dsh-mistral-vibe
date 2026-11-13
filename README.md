@@ -27,7 +27,9 @@ dependencies. The two schema helpers it needs are vendored under `vendor/`.
 - **`models.dev` supplies the ladder**, read field by field rather than guessed from
   ids: `type` for chattability, `modalities.input` for vision (`attachment: true` is
   also set on pdf/audio-only models), `limit.*` for the windows, `reasoning_options` for
-  the levels.
+  the levels. The catalogue is a build-time snapshot of that record; a live
+  `/v1/models` read outranks it on vision, so a capability change does not have to wait
+  for a release.
 - **A settings page** at Settings → **Mistral Vibe**: both credentials with an eye toggle,
   the endpoint, and the model list with its ladder, modality and window on every row.
 - **Secrets stay out of the row file.** A saved key goes to the credential store; the

@@ -14,6 +14,7 @@ import {
   MistralVibeAdapter,
   captureLimits,
   discoverModels,
+  enrichFromModelsDev,
   isChatModelId,
   modelsDevFacts,
   limitSnapshot,
@@ -102,6 +103,17 @@ const captured = { requests: [] };
 const MODELS_DEV_STUB = {
   mistral: {
     models: {
+      // models.dev's record for this model lagged the provider: it still said
+      // text-only while Mistral served it with vision. The stub keeps that stale
+      // shape on purpose, so the suite can prove a ladder refresh never lets it
+      // overwrite a modality the provider reported.
+      "deepseek-v4-1-flash-1017": {
+        name: "DeepSeek V4.1 Flash 1017",
+        limit: { context: 1048576, output: 128000 },
+        modalities: { input: ["text"] },
+        reasoning: true,
+        reasoning_options: [{ type: "effort", values: ["none", "low", "high", "max"] }],
+      },
       "mistral-large-5": {
         status: "deprecated",
         reasoning: true,
@@ -1498,6 +1510,222 @@ await test("one fetch is enough: the stored list serves the page and the picker"
   } finally {
     globalThis.fetch = original;
   }
+});
+
+/**
+ * An adapter that can turn an attachment back into bytes, which is the only
+ * condition under which this route advertises the image modality at all.
+ */
+function withAttachments(adapter) {
+  Object.defineProperty(adapter, "ctx", {
+    value: {
+      get: (name) =>
+        name === "attachments" ? { readImageRequest: async () => ({}) } : undefined,
+    },
+    enumerable: false,
+  });
+  return adapter;
+}
+
+/** A `/v1/models` server that answers with the given rows and nothing else. */
+async function modelServer(data) {
+  const server = createServer((request, response) => {
+    if (new URL(request.url, "http://localhost").pathname === "/v1/models") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data }));
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return { server, baseURL: `http://127.0.0.1:${server.address().port}/v1` };
+}
+
+await test("DeepSeek V4.1 Flash ships with the vision Mistral serves", async () => {
+  // The catalogue is generated from models.dev, and models.dev recorded this
+  // model as text-only while Mistral served it with vision, so the shipped flag
+  // was wrong and every image attachment was rejected at the session controller.
+  const entry = MODEL_CATALOGUE.find((row) => row.id === "deepseek-v4-1-flash-1017");
+  assert.equal(entry.image, true, "the catalogue advertises image input");
+  const adapter = withAttachments(new MistralVibeAdapter(() => ({ apiKey: "sk-test" })));
+  const info = await adapter.resolveModel("mistral-vibe", "deepseek-v4-1-flash-1017");
+  assert.deepEqual(info.inputModalities, ["text", "image"]);
+});
+
+await test("a live read outranks the snapshot for a catalogue model", async () => {
+  // The catalogue is a build-time snapshot; `/v1/models` is the provider
+  // answering for itself. A discovery read has to win in both directions, or a
+  // capability change waits for the next release.
+  const { server, baseURL } = await modelServer([
+    {
+      id: "deepseek-v4-1-flash-1017",
+      name: "DeepSeek V4.1 Flash 1017",
+      max_context_length: 1048576,
+      capabilities: { completion_chat: true, vision: true, reasoning: true },
+    },
+    {
+      id: "zai-glm-5-3-flash",
+      name: "GLM-5.3-Flash",
+      max_context_length: 1048576,
+      capabilities: { completion_chat: true, vision: false, reasoning: true },
+    },
+  ]);
+  try {
+    const adapter = withAttachments(
+      new MistralVibeAdapter(() => ({ apiKey: "sk-test", baseURL })),
+    );
+    const rows = await discoverModels(adapter, {});
+    const flash = rows.find((row) => row.id === "deepseek-v4-1-flash-1017");
+    assert.deepEqual(flash.inputModalities, ["text", "image"], "vision is added from the API");
+    assert.equal(flash.visionFromApi, true, "the provider's answer is recorded on the row");
+    const glm = rows.find((row) => row.id === "zai-glm-5-3-flash");
+    assert.deepEqual(glm.inputModalities, ["text"], "vision is dropped when the API denies it");
+    assert.equal(glm.visionFromApi, false);
+
+    const flashInfo = await adapter.resolveModel("mistral-vibe", "deepseek-v4-1-flash-1017");
+    assert.deepEqual(flashInfo.inputModalities, ["text", "image"], "resolveModel agrees with the read");
+    const glmInfo = await adapter.resolveModel("mistral-vibe", "zai-glm-5-3-flash");
+    assert.deepEqual(glmInfo.inputModalities, ["text"]);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await test("a fetch corrects a list saved while models.dev was stale", async () => {
+  // The reported path: a fetch run before the correction persisted `["text"]`
+  // into modelsJson, and that snapshot used to outlive every later fix.
+  const stored = [
+    {
+      id: "deepseek-v4-1-flash-1017",
+      name: "DeepSeek V4.1 Flash 1017",
+      contextWindow: 1048576,
+      maxTokens: 128000,
+      inputModalities: ["text"],
+      reasoning: true,
+      levels: ["off", "low", "high", "max"],
+      discovered: false,
+    },
+  ];
+  const { server, baseURL } = await modelServer([
+    {
+      id: "deepseek-v4-1-flash-1017",
+      name: "DeepSeek V4.1 Flash 1017",
+      max_context_length: 1048576,
+      capabilities: { completion_chat: true, vision: true, reasoning: true },
+    },
+  ]);
+  try {
+    const adapter = withAttachments(
+      new MistralVibeAdapter(() => ({
+        apiKey: "sk-test",
+        baseURL,
+        modelsJson: JSON.stringify(stored),
+      })),
+    );
+    const rows = await discoverModels(adapter, {});
+    const row = rows.find((entry) => entry.id === "deepseek-v4-1-flash-1017");
+    assert.deepEqual(row.inputModalities, ["text", "image"], "the fetch refreshes the stored row");
+    assert.equal(row.visionFromApi, true);
+
+    // The store itself is only rewritten when the page saves the fetch, but the
+    // picker already answers from the provider's read.
+    const picker = await adapter.listModels("mistral-vibe");
+    assert.deepEqual(
+      picker.find((entry) => entry.id === "deepseek-v4-1-flash-1017").inputModalities,
+      ["text", "image"],
+      "a stale stored modality cannot keep the picker on text",
+    );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+await test("a ladder refresh never rewrites a row's modality", async () => {
+  // The second pass over the merged list exists to fill a missing ladder. It
+  // used to apply models.dev's modalities to every row, so one model models.dev
+  // did not know yet was enough to downgrade a working vision row.
+  const rows = [{ id: "deepseek-v4-1-flash-1017", inputModalities: ["text", "image"] }];
+  await enrichFromModelsDev(rows, undefined, { modalities: false });
+  assert.deepEqual(rows[0].inputModalities, ["text", "image"], "the row keeps its modality");
+  assert.deepEqual(rows[0].levels, ["off", "low", "high", "max"], "the ladder is still filled");
+
+  // The authoritative first pass is unchanged: a row the API claimed vision for
+  // while models.dev's modality list denies it is corrected.
+  const denied = [{ id: "mistral-large-4", inputModalities: ["text", "image"] }];
+  await enrichFromModelsDev(denied, undefined);
+  assert.deepEqual(denied[0].inputModalities, ["text"]);
+});
+
+await test("a discovered vision model resolves with image input", async () => {
+  // listModels read the stored modality, resolveModel read the catalogue entry,
+  // and a discovered entry carries `vision` rather than the catalogue's `image`,
+  // so a vision model added after this bundle resolved as text-only.
+  const adapter = withAttachments(
+    new MistralVibeAdapter(() => ({
+      apiKey: "sk-test",
+      modelsJson: JSON.stringify([
+        {
+          id: "mistral-large-9",
+          name: "Mistral Large 9",
+          contextWindow: 999424,
+          maxTokens: 131072,
+          inputModalities: ["text", "image"],
+          reasoning: true,
+          levels: ["off", "high", "max"],
+          discovered: true,
+        },
+      ]),
+      discoveredModels: ["mistral-large-9"],
+    })),
+  );
+  const info = await adapter.resolveModel("mistral-vibe", "mistral-large-9");
+  assert.deepEqual(info.inputModalities, ["text", "image"]);
+  assert.equal(info.context.contextWindow, 999424, "the stored window survives a restart");
+  assert.deepEqual(
+    info.reasoning.efforts.map((effort) => effort.id),
+    ["off", "high", "max"],
+    "so does the stored ladder",
+  );
+});
+
+await test("the provider's vision answer survives a restart", async () => {
+  // A discovery read records what it saw on the row it saves; a later process
+  // resolves from that row instead of falling back to the build-time snapshot.
+  const adapter = withAttachments(
+    new MistralVibeAdapter(() => ({
+      apiKey: "sk-test",
+      modelsJson: JSON.stringify([
+        {
+          id: "ministral-3b-2512",
+          name: "Ministral 3 3B",
+          contextWindow: 131072,
+          maxTokens: 262144,
+          inputModalities: ["text"],
+          reasoning: false,
+          visionFromApi: false,
+          discovered: false,
+        },
+        {
+          id: "codestral-2508",
+          name: "Codestral 25.08",
+          contextWindow: 256000,
+          maxTokens: 8192,
+          inputModalities: ["text", "image"],
+          reasoning: false,
+          visionFromApi: true,
+          discovered: false,
+        },
+      ]),
+    })),
+  );
+  const denied = await adapter.resolveModel("mistral-vibe", "ministral-3b-2512");
+  assert.deepEqual(denied.inputModalities, ["text"], "the provider's `false` outranks the catalogue");
+  const granted = await adapter.resolveModel("mistral-vibe", "codestral-2508");
+  assert.deepEqual(granted.inputModalities, ["text", "image"], "the provider's `true` does too");
+  const picker = await adapter.listModels("mistral-vibe");
+  assert.deepEqual(picker.find((entry) => entry.id === "ministral-3b-2512").inputModalities, ["text"]);
+  assert.deepEqual(picker.find((entry) => entry.id === "codestral-2508").inputModalities, ["text", "image"]);
 });
 
 server.close();
